@@ -238,10 +238,11 @@ export default function Home() {
         const entries: Array<{ viewType: string; viewImageUrl: string }> = [];
         if (frontFile) {
           const url = await uploadImageAndGetUrl(frontFile);
-          entries.push({
-            viewType: "front",
-            viewImageUrl: url,
-          });
+          // entries.push({
+          //   viewType: "front",
+          //   viewImageUrl: url,
+          // });
+          payload.imageUrl = url;
         }
         if (backFile) {
           entries.push({
@@ -255,7 +256,6 @@ export default function Home() {
             viewType: "left",
             viewImageUrl: url,
           });
-          payload.imageUrl = url;
         }
         if (rightFile) {
           entries.push({
