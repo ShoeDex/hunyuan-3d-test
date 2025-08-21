@@ -48,6 +48,15 @@ function saveHistory(items: JobHistoryItem[]) {
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [multiViewMode, setMultiViewMode] = useState(false);
+  const [leftFile, setLeftFile] = useState<File | null>(null);
+  const [rightFile, setRightFile] = useState<File | null>(null);
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+  const [leftPreview, setLeftPreview] = useState<string | null>(null);
+  const [rightPreview, setRightPreview] = useState<string | null>(null);
+  const [frontPreview, setFrontPreview] = useState<string | null>(null);
+  const [backPreview, setBackPreview] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -175,6 +184,42 @@ export default function Home() {
     }
   };
 
+  const onMultiViewChange = (
+    view: "left" | "right" | "front" | "back",
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const f = e.target.files?.[0] || null;
+    const url = f ? URL.createObjectURL(f) : null;
+    if (view === "left") {
+      setLeftFile(f);
+      setLeftPreview(url);
+    } else if (view === "right") {
+      setRightFile(f);
+      setRightPreview(url);
+    } else if (view === "front") {
+      setFrontFile(f);
+      setFrontPreview(url);
+    } else if (view === "back") {
+      setBackFile(f);
+      setBackPreview(url);
+    }
+  };
+
+  const uploadImageAndGetUrl = async (f: File): Promise<string> => {
+    const key = `uploads/${crypto.randomUUID()}-${encodeURIComponent(f.name)}`;
+    const form = new FormData();
+    form.append("file", f);
+    form.append("key", key);
+    const res = await fetch(`/api/hunyuan3d/upload`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) throw new Error("Upload failed");
+    const data = (await res.json()) as { publicUrl?: string };
+    if (!data.publicUrl) throw new Error("Upload failed: no URL returned");
+    return data.publicUrl;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -184,14 +229,48 @@ export default function Home() {
     setSubmitting(true);
     try {
       let imageBase64: string | undefined;
-      if (file) {
-        imageBase64 = await readFileAsBase64(file);
-      }
       const payload: any = {
         resultFormat: "USDZ",
         enablePBR: true,
       };
-      if (imageBase64) payload.imageBase64 = imageBase64;
+
+      if (multiViewMode) {
+        const entries: Array<{ viewType: string; viewImageUrl: string }> = [];
+        if (frontFile) {
+          const url = await uploadImageAndGetUrl(frontFile);
+          entries.push({
+            viewType: "front",
+            viewImageUrl: url,
+          });
+        }
+        if (backFile) {
+          entries.push({
+            viewType: "back",
+            viewImageUrl: await uploadImageAndGetUrl(backFile),
+          });
+        }
+        if (leftFile) {
+          entries.push({
+            viewType: "left",
+            viewImageUrl: await uploadImageAndGetUrl(leftFile),
+          });
+        }
+        if (rightFile) {
+          entries.push({
+            viewType: "right",
+            viewImageUrl: await uploadImageAndGetUrl(rightFile),
+          });
+        }
+
+        if (entries.length === 0) throw new Error("请至少上传一张多视角图片");
+        payload.multiViewImages = entries;
+        payload.imageUrl = entries[0].viewImageUrl;
+      } else {
+        if (file) {
+          imageBase64 = await readFileAsBase64(file);
+        }
+        if (imageBase64) payload.imageBase64 = imageBase64;
+      }
 
       const res = await fetch("/api/hunyuan3d/submit", {
         method: "POST",
@@ -244,25 +323,122 @@ export default function Home() {
       <h1 className="text-2xl font-semibold mb-4">混元 3D 测试</h1>
       <form onSubmit={handleSubmit} className="grid gap-4 max-w-2xl">
         <div className="grid gap-2">
-          <label className="text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2">
-            上传图片
+          <label className="inline-flex items-center gap-2 text-sm text-gray-700">
             <input
-              type="file"
-              accept="image/*"
-              onChange={onFileChange}
+              type="checkbox"
+              checked={multiViewMode}
+              onChange={(e) => setMultiViewMode(e.target.checked)}
               disabled={submitting}
             />
+            使用多视角模式（left / right / front / back）
           </label>
-
-          {imagePreview ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={imagePreview}
-              alt="preview"
-              className="w-48 h-48 object-cover rounded"
-            />
-          ) : null}
         </div>
+
+        {!multiViewMode ? (
+          <div className="grid gap-2">
+            <label className="text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2">
+              上传图片
+              <input
+                type="file"
+                accept="image/*"
+                onChange={onFileChange}
+                disabled={submitting}
+              />
+            </label>
+
+            {imagePreview ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={imagePreview}
+                alt="preview"
+                className="w-48 h-48 object-cover rounded"
+              />
+            ) : null}
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            <div className="grid gap-1">
+              <span className="flex items-center gap-2 text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2">
+                Left
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onMultiViewChange("left", e)}
+                  disabled={submitting}
+                />
+              </span>
+
+              {leftPreview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={leftPreview}
+                  alt="left"
+                  className="w-32 h-32 object-cover rounded"
+                />
+              ) : null}
+            </div>
+            <div className="grid gap-1">
+              <span className="flex items-center gap-2 text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2">
+                Right
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onMultiViewChange("right", e)}
+                  disabled={submitting}
+                />
+              </span>
+
+              {rightPreview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={rightPreview}
+                  alt="right"
+                  className="w-32 h-32 object-cover rounded"
+                />
+              ) : null}
+            </div>
+            <div className="grid gap-1">
+              <span className="flex items-center gap-2 text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2">
+                Front
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onMultiViewChange("front", e)}
+                  disabled={submitting}
+                />
+              </span>
+
+              {frontPreview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={frontPreview}
+                  alt="front"
+                  className="w-32 h-32 object-cover rounded"
+                />
+              ) : null}
+            </div>
+            <div className="grid gap-1">
+              <span className="flex items-center gap-2 text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2">
+                Back
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => onMultiViewChange("back", e)}
+                  disabled={submitting}
+                />
+              </span>
+
+              {backPreview ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={backPreview}
+                  alt="back"
+                  className="w-32 h-32 object-cover rounded"
+                />
+              ) : null}
+            </div>
+          </div>
+        )}
         <div className="flex gap-3">
           <button
             type="submit"
