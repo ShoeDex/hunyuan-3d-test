@@ -250,10 +250,12 @@ export default function Home() {
           });
         }
         if (leftFile) {
+          const url = await uploadImageAndGetUrl(leftFile);
           entries.push({
             viewType: "left",
-            viewImageUrl: await uploadImageAndGetUrl(leftFile),
+            viewImageUrl: url,
           });
+          payload.imageUrl = url;
         }
         if (rightFile) {
           entries.push({
@@ -264,7 +266,6 @@ export default function Home() {
 
         if (entries.length === 0) throw new Error("请至少上传一张多视角图片");
         payload.multiViewImages = entries;
-        payload.imageUrl = entries[0].viewImageUrl;
       } else {
         if (file) {
           imageBase64 = await readFileAsBase64(file);
