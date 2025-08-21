@@ -10,8 +10,12 @@ type SubmitRequestBody = {
   prompt?: string;
   imageUrl?: string;
   imageBase64?: string;
-  resultFormat?: "GLB" | "OBJ" | "FBX" | string;
+  resultFormat?: "GLB" | "OBJ" | "FBX" | "USDZ" | string;
   enablePBR?: boolean;
+  multiViewImages?: Array<
+    | { viewType?: string; viewImageUrl?: string }
+    | { ViewType?: string; ViewImageUrl?: string }
+  >;
   // Allow passthrough for extra SDK params if needed
   [key: string]: unknown;
 };
@@ -34,6 +38,7 @@ export async function POST(req: Request) {
       imageBase64,
       resultFormat = "USDZ",
       enablePBR = true,
+      multiViewImages,
       ...extraParams
     } = body || {};
 
@@ -74,6 +79,20 @@ export async function POST(req: Request) {
     if (prompt) params.Prompt = prompt;
     if (imageUrl) params.ImageUrl = imageUrl;
     if (imageBase64) params.ImageBase64 = imageBase64;
+    if (Array.isArray(multiViewImages) && multiViewImages.length > 0) {
+      const normalized = multiViewImages
+        .map((v) => {
+          const ViewType = (v as any).ViewType ?? (v as any).viewType;
+          const ViewImageUrl =
+            (v as any).ViewImageUrl ?? (v as any).viewImageUrl;
+          if (!ViewType || !ViewImageUrl) return null;
+          return { ViewType, ViewImageUrl };
+        })
+        .filter(Boolean) as { ViewType: string; ViewImageUrl: string }[];
+      if (normalized.length > 0) {
+        params.MultiViewImages = normalized;
+      }
+    }
 
     const data = await client.SubmitHunyuanTo3DJob(params);
 

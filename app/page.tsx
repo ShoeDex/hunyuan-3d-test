@@ -20,10 +20,6 @@ type JobHistoryItem = {
   jobId: string;
   createdAt: string;
   updatedAt: string;
-  input: {
-    type: "image" | "prompt" | "unknown";
-    prompt?: string;
-  };
   status?: string | null;
   errorCode?: string | null;
   errorMessage?: string | null;
@@ -50,7 +46,6 @@ function saveHistory(items: JobHistoryItem[]) {
 }
 
 export default function Home() {
-  const [prompt, setPrompt] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -132,10 +127,6 @@ export default function Home() {
             jobId: jid,
             createdAt: nowIso,
             updatedAt: nowIso,
-            input: {
-              type: file ? "image" : prompt ? "prompt" : "unknown",
-              prompt: prompt || undefined,
-            },
             status: data.Status,
             errorCode: data.ErrorCode || null,
             errorMessage: data.ErrorMessage || null,
@@ -149,10 +140,6 @@ export default function Home() {
             jobId: jid,
             createdAt: nowIso,
             updatedAt: nowIso,
-            input: {
-              type: file ? "image" : prompt ? "prompt" : "unknown",
-              prompt: prompt || undefined,
-            },
             status: data.Status,
             errorCode: data.ErrorCode || null,
             errorMessage: data.ErrorMessage || null,
@@ -164,10 +151,6 @@ export default function Home() {
             jobId: jid,
             createdAt: nowIso,
             updatedAt: nowIso,
-            input: {
-              type: file ? "image" : prompt ? "prompt" : "unknown",
-              prompt: prompt || undefined,
-            },
             status: data.Status,
             errorCode: data.ErrorCode || null,
             errorMessage: data.ErrorMessage || null,
@@ -204,13 +187,11 @@ export default function Home() {
       if (file) {
         imageBase64 = await readFileAsBase64(file);
       }
-      // API限制：Prompt 与 Image 不能同时存在，这里优先使用图片
       const payload: any = {
-        resultFormat: "GLB",
+        resultFormat: "USDZ",
         enablePBR: true,
       };
       if (imageBase64) payload.imageBase64 = imageBase64;
-      else if (prompt.trim()) payload.prompt = prompt.trim();
 
       const res = await fetch("/api/hunyuan3d/submit", {
         method: "POST",
@@ -228,10 +209,6 @@ export default function Home() {
         jobId: jid,
         createdAt: nowIso,
         updatedAt: nowIso,
-        input: {
-          type: imageBase64 ? "image" : prompt ? "prompt" : "unknown",
-          prompt: prompt || undefined,
-        },
         status: "WAIT",
         errorCode: null,
         errorMessage: null,
@@ -267,28 +244,16 @@ export default function Home() {
       <h1 className="text-2xl font-semibold mb-4">混元 3D 测试</h1>
       <form onSubmit={handleSubmit} className="grid gap-4 max-w-2xl">
         <div className="grid gap-2">
-          <label className="text-sm text-gray-600">
-            提示词（与图片二选一）
+          <label className="text-sm text-gray-600 border border-gray-300 rounded-md px-3 py-2">
+            上传图片
+            <input
+              type="file"
+              accept="image/*"
+              onChange={onFileChange}
+              disabled={submitting}
+            />
           </label>
-          <input
-            type="text"
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="例如：生成鞋模型"
-            className="w-full rounded-md border px-3 py-2"
-            disabled={submitting}
-          />
-        </div>
-        <div className="grid gap-2">
-          <label className="text-sm text-gray-600">
-            上传图片（与提示词二选一）
-          </label>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={onFileChange}
-            disabled={submitting}
-          />
+
           {imagePreview ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
@@ -400,9 +365,6 @@ export default function Home() {
                 <div className="min-w-0">
                   <div className="text-sm font-mono truncate">{h.jobId}</div>
                   <div className="text-xs text-gray-600">
-                    {h.input.type}
-                    {h.input.prompt ? ` · ${h.input.prompt}` : ""}
-                    {" · "}
                     {new Date(h.updatedAt).toLocaleString()}
                   </div>
                 </div>
