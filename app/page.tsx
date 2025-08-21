@@ -230,7 +230,7 @@ export default function Home() {
     try {
       let imageBase64: string | undefined;
       const payload: any = {
-        resultFormat: "USDZ",
+        resultFormat: "GLB",
         enablePBR: true,
       };
 
