@@ -1,103 +1,427 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Script from "next/script";
+
+type File3D = {
+  Type?: string;
+  Url?: string;
+  PreviewImageUrl?: string;
+};
+
+type QueryResponse = {
+  Status?: "WAIT" | "RUN" | "FAIL" | "DONE" | string;
+  ErrorCode?: string;
+  ErrorMessage?: string;
+  ResultFile3Ds?: File3D[];
+};
+
+type JobHistoryItem = {
+  jobId: string;
+  createdAt: string;
+  updatedAt: string;
+  input: {
+    type: "image" | "prompt" | "unknown";
+    prompt?: string;
+  };
+  status?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  resultFile3Ds?: File3D[] | null;
+};
+
+const STORAGE_KEY = "hunyuan3d_jobs_v1";
+
+function loadHistory(): JobHistoryItem[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(items: JobHistoryItem[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+  } catch {}
+}
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [prompt, setPrompt] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<File3D[] | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [history, setHistory] = useState<JobHistoryItem[]>([]);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const hasModel = results && results.length > 0;
+
+  const previewUrl = useMemo(() => {
+    const f = (results || [])[0];
+    return f?.PreviewImageUrl || null;
+  }, [results]);
+
+  const readFileAsBase64 = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(",")[1] || result; // strip data:*;base64,
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const clearPolling = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    try {
+      setHistory(loadHistory());
+    } catch {}
+    return () => clearPolling();
+  }, []);
+
+  const upsertHistory = useCallback((item: JobHistoryItem) => {
+    setHistory((prev) => {
+      const existingIndex = prev.findIndex((j) => j.jobId === item.jobId);
+      let next: JobHistoryItem[];
+      if (existingIndex >= 0) {
+        next = [...prev];
+        next[existingIndex] = {
+          ...next[existingIndex],
+          ...item,
+          updatedAt: item.updatedAt,
+        };
+      } else {
+        next = [item, ...prev];
+      }
+      if (next.length > 20) next = next.slice(0, 20);
+      saveHistory(next);
+      return next;
+    });
+  }, []);
+
+  const startPolling = useCallback((jid: string) => {
+    clearPolling();
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/hunyuan3d/query?jobId=${encodeURIComponent(jid)}`
+        );
+        const data: QueryResponse = await res.json();
+        setStatus(data.Status || null);
+        if (data.Status === "DONE") {
+          clearPolling();
+          setResults(data.ResultFile3Ds || null);
+          const nowIso = new Date().toISOString();
+          upsertHistory({
+            jobId: jid,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            input: {
+              type: file ? "image" : prompt ? "prompt" : "unknown",
+              prompt: prompt || undefined,
+            },
+            status: data.Status,
+            errorCode: data.ErrorCode || null,
+            errorMessage: data.ErrorMessage || null,
+            resultFile3Ds: data.ResultFile3Ds || null,
+          });
+        } else if (data.Status === "FAIL") {
+          clearPolling();
+          setError(data.ErrorMessage || data.ErrorCode || "Job failed");
+          const nowIso = new Date().toISOString();
+          upsertHistory({
+            jobId: jid,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            input: {
+              type: file ? "image" : prompt ? "prompt" : "unknown",
+              prompt: prompt || undefined,
+            },
+            status: data.Status,
+            errorCode: data.ErrorCode || null,
+            errorMessage: data.ErrorMessage || null,
+            resultFile3Ds: data.ResultFile3Ds || null,
+          });
+        } else if (data.Status === "RUN" || data.Status === "WAIT") {
+          const nowIso = new Date().toISOString();
+          upsertHistory({
+            jobId: jid,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            input: {
+              type: file ? "image" : prompt ? "prompt" : "unknown",
+              prompt: prompt || undefined,
+            },
+            status: data.Status,
+            errorCode: data.ErrorCode || null,
+            errorMessage: data.ErrorMessage || null,
+            resultFile3Ds: data.ResultFile3Ds || null,
+          });
+        }
+      } catch (e: any) {
+        clearPolling();
+        setError(e?.message || "Query failed");
+      }
+    }, 3000);
+  }, []);
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] || null;
+    setFile(f);
+    if (f) {
+      const url = URL.createObjectURL(f);
+      setImagePreview(url);
+    } else {
+      setImagePreview(null);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setResults(null);
+    setStatus(null);
+    setJobId(null);
+    setSubmitting(true);
+    try {
+      let imageBase64: string | undefined;
+      if (file) {
+        imageBase64 = await readFileAsBase64(file);
+      }
+      // API限制：Prompt 与 Image 不能同时存在，这里优先使用图片
+      const payload: any = {
+        resultFormat: "GLB",
+        enablePBR: true,
+      };
+      if (imageBase64) payload.imageBase64 = imageBase64;
+      else if (prompt.trim()) payload.prompt = prompt.trim();
+
+      const res = await fetch("/api/hunyuan3d/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Submit failed");
+      const jid: string | undefined = data?.JobId;
+      if (!jid) throw new Error("No JobId returned");
+      setJobId(jid);
+      setStatus("WAIT");
+      const nowIso = new Date().toISOString();
+      upsertHistory({
+        jobId: jid,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        input: {
+          type: imageBase64 ? "image" : prompt ? "prompt" : "unknown",
+          prompt: prompt || undefined,
+        },
+        status: "WAIT",
+        errorCode: null,
+        errorMessage: null,
+        resultFile3Ds: null,
+      });
+      startPolling(jid);
+    } catch (e: any) {
+      setError(e?.message || "Submit error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleSelectHistory = (item: JobHistoryItem) => {
+    clearPolling();
+    setJobId(item.jobId);
+    setStatus(item.status || null);
+    setError(item.errorMessage || null);
+    setResults(item.resultFile3Ds || null);
+    if (item.status === "RUN") {
+      startPolling(item.jobId);
+    }
+  };
+
+  const clearHistory = () => {
+    const next: JobHistoryItem[] = [];
+    setHistory(next);
+    saveHistory(next);
+  };
+
+  return (
+    <div className="min-h-screen p-6 sm:p-10">
+      <h1 className="text-2xl font-semibold mb-4">混元 3D 测试</h1>
+      <form onSubmit={handleSubmit} className="grid gap-4 max-w-2xl">
+        <div className="grid gap-2">
+          <label className="text-sm text-gray-600">
+            提示词（与图片二选一）
+          </label>
+          <input
+            type="text"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="例如：生成鞋模型"
+            className="w-full rounded-md border px-3 py-2"
+            disabled={submitting}
+          />
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
+        <div className="grid gap-2">
+          <label className="text-sm text-gray-600">
+            上传图片（与提示词二选一）
+          </label>
+          <input
+            type="file"
+            accept="image/*"
+            onChange={onFileChange}
+            disabled={submitting}
           />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+          {imagePreview ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imagePreview}
+              alt="preview"
+              className="w-48 h-48 object-cover rounded"
+            />
+          ) : null}
+        </div>
+        <div className="flex gap-3">
+          <button
+            type="submit"
+            className="rounded bg-black text-white px-4 py-2 disabled:opacity-50"
+            disabled={submitting}
+          >
+            {submitting ? "提交中..." : "提交任务"}
+          </button>
+          {jobId ? (
+            <span className="text-sm text-gray-600">JobId: {jobId}</span>
+          ) : null}
+        </div>
+      </form>
+
+      <div className="mt-8 grid gap-3 max-w-3xl">
+        {status ? <div className="text-sm">状态：{status}</div> : null}
+        {error ? (
+          <div className="text-sm text-red-600">错误：{error}</div>
+        ) : null}
+
+        {results && results.length > 0 ? (
+          <div className="grid gap-4">
+            {previewUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={previewUrl} alt="preview" className="w-80 rounded" />
+            ) : null}
+
+            <div className="grid gap-2">
+              <div className="font-medium">生成文件</div>
+              <ul className="list-disc pl-6">
+                {results.map((f, idx) => (
+                  <li key={idx} className="text-sm">
+                    <span className="mr-2">{f.Type}</span>
+                    {f.Url ? (
+                      <a
+                        href={f.Url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-600 underline"
+                      >
+                        下载
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {hasModel && jobId ? (
+              <div className="mt-2">
+                <Script
+                  type="module"
+                  src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"
+                  strategy="afterInteractive"
+                />
+                {/* @ts-expect-error model-viewer is a web component */}
+                <model-viewer
+                  src={`/api/hunyuan3d/query?jobId=${encodeURIComponent(
+                    jobId
+                  )}&model=true`}
+                  poster={previewUrl || undefined}
+                  camera-controls
+                  auto-rotate
+                  crossorigin="anonymous"
+                  touch-action="pan-y"
+                  style={{
+                    width: "100%",
+                    height: "480px",
+                    background: "#f3f4f6",
+                    borderRadius: 8,
+                    display: "block",
+                    position: "relative",
+                    contain: "strict",
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      <div className="mt-10 max-w-4xl">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-medium">历史记录</h2>
+          <button
+            onClick={clearHistory}
+            className="text-sm text-gray-600 hover:text-black underline"
+          >
+            清空
+          </button>
+        </div>
+        {history.length === 0 ? (
+          <div className="text-sm text-gray-500">暂无记录</div>
+        ) : (
+          <ul className="divide-y rounded border">
+            {history.map((h) => (
+              <li
+                key={h.jobId}
+                className="p-3 flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-mono truncate">{h.jobId}</div>
+                  <div className="text-xs text-gray-600">
+                    {h.input.type}
+                    {h.input.prompt ? ` · ${h.input.prompt}` : ""}
+                    {" · "}
+                    {new Date(h.updatedAt).toLocaleString()}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs px-2 py-0.5 rounded bg-gray-100">
+                    {h.status || "-"}
+                  </span>
+                  <button
+                    onClick={() => handleSelectHistory(h)}
+                    className="text-sm px-3 py-1 rounded bg-black text-white"
+                  >
+                    查看
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
